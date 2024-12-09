@@ -8,7 +8,7 @@ the local filesystem.
 ## Usage
 
 ```
-simple-http /my/mount/dir
+python -m simple_httpfs /my/mount/dir
 curl /my/mount/dir/http/slashdot.org/country.js..
 ```
 
