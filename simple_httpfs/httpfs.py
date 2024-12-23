@@ -1,5 +1,6 @@
 import collections
 import logging
+import math
 import os
 import os.path as op
 import re
@@ -221,11 +222,13 @@ class HttpFs(LoggingMixIn, Operations):
         block_size=2 ** 20,
         aws_profile=None,
         logger=None,
+        split_big_files=sys.maxsize,
     ):
         self.lru_cache = LRUCache(capacity=lru_capacity)
         self.lru_attrs = LRUCache(capacity=lru_capacity)
         self.schema = schema
         self.logger = logger
+        self.split_big_files = split_big_files
         self.last_report_time = 0
         self.total_requests = 0
         self.getting = set()
@@ -261,7 +264,17 @@ class HttpFs(LoggingMixIn, Operations):
             self.logger.exception(ex)
             raise
 
+    def isBigFilePart(self, path):
+        parent = "/".join(path.split("/")[:-1])
+        if parent in self.lru_attrs:
+            if "st_size" in self.lru_attrs[parent]:
+                if self.lru_attrs[parent]["st_size"] > self.split_big_files:
+                    return parent
+        return False
+
     def getattr(self, path, fh=None):
+        self.logger.info("getattr %s %s", path, fh)
+
         try:
             if path in self.lru_attrs:
                 return self.lru_attrs[path]
@@ -269,6 +282,18 @@ class HttpFs(LoggingMixIn, Operations):
             if path == "/":
                 self.lru_attrs[path] = dict(st_mode=(S_IFDIR | 0o555), st_nlink=2)
                 return self.lru_attrs[path]
+
+            if parent := self.isBigFilePart(path):
+                # last part size is st_size = self.lru_attrs[parent]["st_size"] % self.split_big_files
+
+                return dict(
+                        st_mode=(S_IFREG | 0o444),
+                        st_nlink=1,
+                        st_size=self.lru_attrs[parent]["st_size"] % self.split_big_files if int(re.findall('[0-9]+$', path)[-1]) == (self.lru_attrs[parent]["st_size"] // self.split_big_files) else self.split_big_files,
+                        st_ctime=time(),
+                        st_mtime=time(),
+                        st_atime=time(),
+                    )
 
             if (
                 path[-2:] != ".."
@@ -290,14 +315,21 @@ class HttpFs(LoggingMixIn, Operations):
             # print("url:", url, "head.url", head.url)
 
             if size is not None:
-                self.lru_attrs[path] = dict(
-                    st_mode=(S_IFREG | 0o644),
-                    st_nlink=1,
-                    st_size=size,
-                    st_ctime=time(),
-                    st_mtime=time(),
-                    st_atime=time(),
-                )
+                if size > self.split_big_files:
+                    self.lru_attrs[path] = dict(
+                        st_mode=(S_IFDIR | 0o555),
+                        st_nlink=2,
+                        st_size=size,
+                    )
+                else:
+                    self.lru_attrs[path] = dict(
+                        st_mode=(S_IFREG | 0o444),
+                        st_nlink=1,
+                        st_size=size,
+                        st_ctime=time(),
+                        st_mtime=time(),
+                        st_atime=time(),
+                    )
             else:
                 self.lru_attrs[path] = dict(st_mode=(S_IFDIR | 0o555), st_nlink=2)
 
@@ -314,6 +346,25 @@ class HttpFs(LoggingMixIn, Operations):
 
     def write(self, path, buf, size, offset, fip):
         return 0
+
+    def readdir(self, path, fh):
+        self.logger.debug("readdir %s %s", path, fh)
+
+        try:
+            attr = self.getattr(path)
+            url = "{}:/{}".format(self.schema, path[:-2])
+            size = self.getSize(url)
+            parts = math.ceil(size / self.split_big_files)
+
+            base = path[:-2].split('/')[-1]
+
+            for x in [ f"{base}.{str(part).zfill(math.ceil(math.log10(parts)))}" for part in range(0, parts) ] + [".", ".."]:
+                yield x
+
+        except Exception as ex:
+            self.logger.exception(ex)
+            raise
+
 
     def read(self, path, size, offset, fh):
         t1 = time()
@@ -337,7 +388,12 @@ class HttpFs(LoggingMixIn, Operations):
             self.total_requests += 1
 
             attr = self.getattr(path)
-            url = "{}:/{}".format(self.schema, path[:-2])
+
+            if parent := self.isBigFilePart(path):
+                url = "{}:/{}".format(self.schema, parent[:-2])
+                offset += int(re.findall('[0-9]+$', path)[-1]) * self.split_big_files
+            else:
+                url = "{}:/{}".format(self.schema, path[:-2])
 
             self.logger.debug("read url: {}".format(url))
             self.logger.debug(

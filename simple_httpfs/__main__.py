@@ -44,6 +44,8 @@ def main():
 
     parser.add_argument("-l", "--log", default=None, type=str)
 
+    parser.add_argument("--split-big-files", default=sys.maxsize, type=int)
+
     args = vars(parser.parse_args())
 
     if not op.isdir(args["mountpoint"]):
@@ -101,6 +103,7 @@ Mounting HTTP Filesystem...
             block_size=args["block_size"],
             aws_profile=args["aws_profile"],
             logger=logger,
+            split_big_files=args["split_big_files"],
         ),
         args["mountpoint"],
         foreground=args["foreground"],
