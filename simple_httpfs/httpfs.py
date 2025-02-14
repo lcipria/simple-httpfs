@@ -289,7 +289,7 @@ class HttpFs(LoggingMixIn, Operations):
                 return dict(
                         st_mode=(S_IFREG | 0o444),
                         st_nlink=1,
-                        st_size=self.lru_attrs[parent]["st_size"] % self.split_big_files if int(re.findall('[0-9]+$', path)[-1]) == (self.lru_attrs[parent]["st_size"] // self.split_big_files) else self.split_big_files,
+                        st_size=self.lru_attrs[parent]["st_size"] % self.split_big_files if int(re.findall('[0-9]+$', path)[-1]) > (self.lru_attrs[parent]["st_size"] // self.split_big_files) else self.split_big_files,
                         st_ctime=time(),
                         st_mtime=time(),
                         st_atime=time(),
@@ -358,7 +358,7 @@ class HttpFs(LoggingMixIn, Operations):
 
             base = path[:-2].split('/')[-1]
 
-            for x in [ f"{base}.{str(part).zfill(math.ceil(math.log10(parts)))}" for part in range(0, parts) ] + [".", ".."]:
+            for x in [ f"{base}.{str(part).zfill(math.ceil(math.log10(parts + 1)))}" for part in range(1, parts + 1) ] + [".", ".."]:
                 yield x
 
         except Exception as ex:
@@ -391,7 +391,7 @@ class HttpFs(LoggingMixIn, Operations):
 
             if parent := self.isBigFilePart(path):
                 url = "{}:/{}".format(self.schema, parent[:-2])
-                offset += int(re.findall('[0-9]+$', path)[-1]) * self.split_big_files
+                offset += (int(re.findall('[0-9]+$', path)[-1]) - 1) * self.split_big_files
             else:
                 url = "{}:/{}".format(self.schema, path[:-2])
 
